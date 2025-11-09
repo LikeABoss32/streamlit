@@ -1,22 +1,29 @@
 # app_final_v5.py
-import streamlit as st
-import pandas as pd, numpy as np
-import plotly.express as px, plotly.graph_objects as go
+import os
+import time
+import base64
 from io import BytesIO
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.inspection import permutation_importance
-import base64, time
+
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.styles import Font, PatternFill
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 st.set_page_config(layout="wide", page_title="Disease Dashboard (v5)", initial_sidebar_state="collapsed")
 
-# --- Styling: pink -> purple gradient like PDF screenshots ---
+# --- Styling ---
 st.markdown("""
     <style>
     .stApp { background: linear-gradient(180deg, #ff9a9e 0%, #8e44ad 100%); }
@@ -28,19 +35,23 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- Load data safely ---
 @st.cache_data
 def load_data():
     path = os.path.join(os.path.dirname(__file__), "disease_data_final_v5.csv")
+    if not os.path.exists(path):
+        st.error(f"❌ File not found: {path}")
+        return pd.DataFrame()
     return pd.read_csv(path)
 
 df = load_data()
 
-# Header
-st.markdown('<div class="header"><div class="title">Disease Analysis & Monitoring Dashboard </div></div>', unsafe_allow_html=True)
+# --- Header ---
+st.markdown('<div class="header"><div class="title">Disease Analysis & Monitoring Dashboard</div></div>', unsafe_allow_html=True)
 
-# Filters
+# --- Filters ---
 with st.form("filters"):
-    c1,c2,c3,c4,c5 = st.columns([1.4,1.4,1,1,0.8])
+    c1, c2, c3, c4, c5 = st.columns([1.4, 1.4, 1, 1, 0.8])
     with c1:
         state = st.selectbox("State/UT", ["All"] + sorted(df['state'].unique()))
     with c2:
@@ -51,39 +62,32 @@ with st.form("filters"):
         disease = st.selectbox("Disease", ["All"] + sorted(df['disease'].unique()))
     with c5:
         submit = st.form_submit_button("UPDATE DASHBOARD")
+
 if submit:
     st.rerun()
 
-
-# Apply filters
+# --- Apply filters ---
 d = df.copy()
 if state != "All":
-    d = d[d['state']==state]
+    d = d[d['state'] == state]
 if city != "All":
-    d = d[d['city']==city]
+    d = d[d['city'] == city]
 if year != "All":
-    d = d[d['year']==int(year)]
+    d = d[d['year'] == int(year)]
 if disease != "All":
-    d = d[d['disease']==disease]
+    d = d[d['disease'] == disease]
 
-# KPI Tiles with fade-in (simulate by small time delays for presentation)
-k1,k2,k3,k4 = st.columns([1,1,1,1])
-k1.write("")
-k2.write("")
-k3.write("")
-k4.write("")
+# --- KPIs ---
+k1, k2, k3, k4 = st.columns(4)
 k1.markdown(f'<div class="card"><div class="kpi" style="background:linear-gradient(90deg,#ff6aa3,#ffb3e6);">Total Cases<br><span style="font-size:22px;font-weight:800">{d["cases"].sum():,}</span></div></div>', unsafe_allow_html=True)
 k2.markdown(f'<div class="card"><div class="kpi" style="background:linear-gradient(90deg,#8e44ad,#b28cff);">Total Deaths<br><span style="font-size:22px;font-weight:800">{d["deaths"].sum():,}</span></div></div>', unsafe_allow_html=True)
 k3.markdown(f'<div class="card"><div class="kpi" style="background:linear-gradient(90deg,#ff9a9e,#ff6aa3);">Affected States<br><span style="font-size:22px;font-weight:800">{d["state"].nunique()}</span></div></div>', unsafe_allow_html=True)
 k4.markdown(f'<div class="card"><div class="kpi" style="background:linear-gradient(90deg,#6a11cb,#ff6a00);">Avg Temp (K)<br><span style="font-size:22px;font-weight:800">{round(d["temperature"].mean(),2) if not d.empty else 0}</span></div></div>', unsafe_allow_html=True)
-time.sleep(0.15)
 
-st.markdown("<br/>", unsafe_allow_html=True)
+# --- Tabs ---
+tabs = st.tabs(["Overview", "Geographic Analysis", "Trend Analysis", "ML Prediction", "Reports & Downloads"])
 
-# Tabs
-tabs = st.tabs(["Overview","Geographic Analysis","Trend Analysis","ML Prediction","Reports & Downloads"])
-
-# --- Overview tab ---
+# --- Overview ---
 with tabs[0]:
     st.markdown('<div class="card"><h3>Cases Timeline</h3></div>', unsafe_allow_html=True)
     timeline = d.groupby('year', as_index=False)['cases'].sum().sort_values('year')
@@ -91,9 +95,8 @@ with tabs[0]:
         st.info("No data")
     else:
         fig = px.bar(timeline, x='year', y='cases', color_discrete_sequence=['#ff6aa3'])
-        fig.update_layout(height=420, transition={'duration':700})
+        fig.update_layout(height=420)
         st.plotly_chart(fig, use_container_width=True)
-    st.markdown('<div class="card" style="margin-top:12px"><div style="display:flex;gap:18px"><div style="flex:1">', unsafe_allow_html=True)
         # --- Dynamic Seasonal Analysis and Pie Chart (Fully Reactive) ---
 if not d.empty and "month" in d.columns:
     # Define Seasons Function
