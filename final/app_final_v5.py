@@ -30,8 +30,7 @@ st.markdown("""
 
 @st.cache_data
 def load_data():
-        path = os.path.join(os.path.dirname(__file__), "disease_data_final_v5.csv")
-
+    path = os.path.join(os.path.dirname(__file__), "disease_data_final_v5.csv")
     return pd.read_csv(path)
 
 df = load_data()
