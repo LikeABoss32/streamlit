@@ -128,7 +128,8 @@ CITY_COORDS = {
 @st.cache_data
 def load_workbook():
 
-    file_name = "Clinic_db_with_metadata.csv"
+    file_name = "../Clinic_db_with_metadata.csv"
+
 
     try:
         df = pd.read_csv(file_name)
