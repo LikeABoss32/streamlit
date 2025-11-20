@@ -121,22 +121,28 @@ CITY_COORDS = {
 # ---------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------
-@st.cache_data
 uploaded_file = st.file_uploader(
     "📂 Upload Clinic Database Excel file",
     type=["xlsx"]
 )
 
 @st.cache_data
-def load_workbook(uploaded):
-    if uploaded is not None:
-        return pd.read_excel(uploaded, sheet_name=None)
-    else:
-        st.warning("Please upload Clinic_db_with_metadata.xlsx")
+def load_workbook(file_bytes):
+    if file_bytes is None:
         return {}
 
+    # IMPORTANT: use BytesIO
+    from io import BytesIO
+    return pd.read_excel(BytesIO(file_bytes), sheet_name=None)
+    
 
-sheets = load_workbook(uploaded_file)
+if uploaded_file is None:
+    st.warning("Please upload Clinic_db_with_metadata.xlsx")
+    st.stop()
+
+# Read actual bytes
+sheets = load_workbook(uploaded_file.getvalue())
+
 
 appointments_df = sheets.get("appointments")
 patients_df     = sheets.get("patient")
