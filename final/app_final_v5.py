@@ -125,11 +125,10 @@ CITY_COORDS = {
 @st.cache_data
 def load_workbook():
  
-    excel_files = ["Clinic_db_with_metadata.xlsx", "Clinic_db.xlsx"]
 
-    for fname in excel_files:
         try:
-            xls = pd.read_excel(fname, sheet_name=None)
+            df = pd.read_csv("Clinic_db_with_metadata.csv")
+
             return xls
         except FileNotFoundError:
             continue
