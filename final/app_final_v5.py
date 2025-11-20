@@ -1,445 +1,1007 @@
-# app_final_v5.py
-import os
-import time
-import base64
-from io import BytesIO
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import date, datetime, timedelta
+import numpy as np
 
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.preprocessing import LabelEncoder
-from sklearn.inspection import permutation_importance
+# ---------------------------------------------------------
+# Streamlit basic config
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="Clinic Analytics Dashboard",
+    layout="wide"
+)
 
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.styles import Font, PatternFill
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
-
-st.set_page_config(layout="wide", page_title="Disease Dashboard (v5)", initial_sidebar_state="collapsed")
-
-# --- Styling ---
+# ---------------------------------------------------------
+# Styling – professional blue theme, top filters
+# ---------------------------------------------------------
 st.markdown("""
-    <style>
-    .stApp { background: linear-gradient(180deg, #ff9a9e 0%, #8e44ad 100%); }
-    .header { background: rgba(255,255,255,0.06); padding:18px; border-radius:8px; margin-bottom:10px; }
-    .title { font-size:28px; color:white; font-weight:700; text-align:center; }
-    .card { background:white; border-radius:12px; padding:14px; box-shadow:0 8px 30px rgba(0,0,0,0.12); }
-    .kpi { text-align:center; padding:12px; border-radius:8px; color:white; font-weight:700; }
-    .btn { background: linear-gradient(90deg,#ff6aa3,#8e44ad); color:white; padding:8px 12px; border-radius:8px; }
-    </style>
+<style>
+:root {
+    --primary-color: #2563eb;    /* blue */
+    --text-color: #0f172a;
+}
+
+html, body, [class*="css"]  {
+    font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Main background */
+body {
+    background-color: #0b1120;
+    color: #e5e7eb;
+}
+
+/* Header card */
+.main-header {
+    background: linear-gradient(90deg, #020617, #0b1120);
+    border-radius: 16px;
+    padding: 18px 22px;
+    margin-bottom: 12px;
+    border: 1px solid #1f2937;
+}
+
+/* Filter bar */
+.filter-bar {
+    background: #020617;
+    border-radius: 14px;
+    padding: 10px 18px 4px 18px;
+    margin-bottom: 10px;
+    border: 1px solid #1f2937;
+}
+
+/* Cards */
+.card {
+    background: #020617;
+    border-radius: 16px;
+    padding: 18px 20px;
+    border: 1px solid #1f2937;
+    margin-bottom: 16px;
+}
+
+/* KPI metric styling */
+.metric-label {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #9ca3af;
+}
+.metric-value {
+    font-size: 26px;
+    font-weight: 700;
+    color: #e5e7eb;
+}
+
+/* Make select boxes slimmer and blue-focused */
+.stSelectbox > div > div {
+    border-radius: 999px;
+}
+</style>
 """, unsafe_allow_html=True)
 
-# --- Load data safely ---
+# ---------------------------------------------------------
+# Helper – Indian season mapping
+# ---------------------------------------------------------
+def india_season(month: int) -> str:
+    if month in (12, 1, 2):
+        return "Winter"
+    elif month in (3, 4, 5):
+        return "Summer / Pre-Monsoon"
+    elif month in (6, 7, 8, 9):
+        return "Monsoon"
+    elif month in (10, 11):
+        return "Post-Monsoon"
+    return "Unknown"
+
+# Approx city coordinates for India map (marker locations)
+CITY_COORDS = {
+    "Mumbai": (19.0760, 72.8777),
+    "Delhi": (28.7041, 77.1025),
+    "Jaipur": (26.9124, 75.7873),
+    "Bangalore": (12.9716, 77.5946),
+    "Ahmedabad": (23.0225, 72.5714),
+    "Kolkata": (22.5726, 88.3639),
+    "Kochi": (9.9312, 76.2673),
+    "Hyderabad": (17.3850, 78.4867),
+    "Chennai": (13.0827, 80.2707),
+    "Thiruvananthapuram": (8.5241, 76.9366),
+    "Lucknow": (26.8467, 80.9462),
+    "Pune": (18.5204, 73.8567),
+    "Chandigarh": (30.7333, 76.7794),
+    "Indore": (22.7196, 75.8577),
+    "Nagpur": (21.1458, 79.0882),
+    "Patna": (25.5941, 85.1376),
+    "Ludhiana": (30.9010, 75.8573),
+    "Kanpur": (26.4499, 80.3319),
+    "Surat": (21.1702, 72.8311),
+}
+
+# ---------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------
 @st.cache_data
-def load_data():
-    path = os.path.join(os.path.dirname(__file__), "disease_data_final_v5.csv")
-    if not os.path.exists(path):
-        st.error(f"❌ File not found: {path}")
-        return pd.DataFrame()
-    return pd.read_csv(path)
+def load_workbook():
+    """
+    Try to load Clinic_db_with_metadata.xlsx first,
+    fallback to Clinic_db.xlsx if needed.
+    """
+    try:
+        xls = pd.read_excel("Clinic_db_with_metadata.xlsx", sheet_name=None)
+    except FileNotFoundError:
+        xls = pd.read_excel("Clinic_db.xlsx", sheet_name=None)
+    return xls
 
-df = load_data()
+sheets = load_workbook()
 
-# --- Header ---
-st.markdown('<div class="header"><div class="title">Disease Analysis & Monitoring Dashboard</div></div>', unsafe_allow_html=True)
+appointments_df = sheets.get("appointments")
+patients_df     = sheets.get("patient")
+departments_df  = sheets.get("department")
+doctors_df      = sheets.get("doctor")
+rooms_df        = sheets.get("room")
+billing_df      = sheets.get("billing")
+reason_meta_df  = sheets.get("reason_categories")
+doctor_meta_df  = sheets.get("doctor_meta")
+room_meta_df    = sheets.get("room_meta")
 
-# --- Filters ---
-with st.form("filters"):
-    c1, c2, c3, c4, c5 = st.columns([1.4, 1.4, 1, 1, 0.8])
-    with c1:
-        state = st.selectbox("State/UT", ["All"] + sorted(df['state'].unique()))
-    with c2:
-        city = st.selectbox("City", ["All"] + sorted(df['city'].unique()))
-    with c3:
-        year = st.selectbox("Year", ["All"] + sorted(df['year'].unique()))
-    with c4:
-        disease = st.selectbox("Disease", ["All"] + sorted(df['disease'].unique()))
-    with c5:
-        submit = st.form_submit_button("UPDATE DASHBOARD")
+if appointments_df is None or patients_df is None:
+    st.error("Appointments or Patient sheet is missing in the workbook. Please check the Excel file.")
+    st.stop()
 
-if submit:
-    st.rerun()
+# ---------------------------------------------------------
+# Build enriched appointments dataframe
+# ---------------------------------------------------------
+df = appointments_df.copy()
 
-# --- Apply filters ---
-d = df.copy()
-if state != "All":
-    d = d[d['state'] == state]
-if city != "All":
-    d = d[d['city'] == city]
-if year != "All":
-    d = d[d['year'] == int(year)]
-if disease != "All":
-    d = d[d['disease'] == disease]
+# Merge patient info
+df = df.merge(
+    patients_df[["patientid", "patientname", "gender", "city", "dob"]],
+    on="patientid",
+    how="left"
+)
 
-# --- KPIs ---
-k1, k2, k3, k4 = st.columns(4)
-k1.markdown(f'<div class="card"><div class="kpi" style="background:linear-gradient(90deg,#ff6aa3,#ffb3e6);">Total Cases<br><span style="font-size:22px;font-weight:800">{d["cases"].sum():,}</span></div></div>', unsafe_allow_html=True)
-k2.markdown(f'<div class="card"><div class="kpi" style="background:linear-gradient(90deg,#8e44ad,#b28cff);">Total Deaths<br><span style="font-size:22px;font-weight:800">{d["deaths"].sum():,}</span></div></div>', unsafe_allow_html=True)
-k3.markdown(f'<div class="card"><div class="kpi" style="background:linear-gradient(90deg,#ff9a9e,#ff6aa3);">Affected States<br><span style="font-size:22px;font-weight:800">{d["state"].nunique()}</span></div></div>', unsafe_allow_html=True)
-k4.markdown(f'<div class="card"><div class="kpi" style="background:linear-gradient(90deg,#6a11cb,#ff6a00);">Avg Temp (K)<br><span style="font-size:22px;font-weight:800">{round(d["temperature"].mean(),2) if not d.empty else 0}</span></div></div>', unsafe_allow_html=True)
-
-# --- Tabs ---
-tabs = st.tabs(["Overview", "Geographic Analysis", "Trend Analysis", "ML Prediction", "Reports & Downloads"])
-
-# --- Overview ---
-with tabs[0]:
-    st.markdown('<div class="card"><h3>Cases Timeline</h3></div>', unsafe_allow_html=True)
-    timeline = d.groupby('year', as_index=False)['cases'].sum().sort_values('year')
-    if timeline.empty:
-        st.info("No data")
-    else:
-        fig = px.bar(timeline, x='year', y='cases', color_discrete_sequence=['#ff6aa3'])
-        fig.update_layout(height=420)
-        st.plotly_chart(fig, use_container_width=True)
-        # --- Dynamic Seasonal Analysis and Pie Chart (Fully Reactive) ---
-if not d.empty and "month" in d.columns:
-    # Define Seasons Function
-    def month_to_season(m):
-        if m in [6, 7, 8, 9]:
-            return "Monsoon"
-        elif m in [10, 11, 12, 1]:
-            return "Post-Monsoon"
-        elif m in [2, 3, 4]:
-            return "Summer"
-        else:
-            return "Winter"
-
-    # Ensure we create a fresh copy and apply the season label
-    d = d.copy()
-    d["season"] = d["month"].apply(month_to_season)
-
-    # Define consistent season order
-    season_order = ["Monsoon", "Post-Monsoon", "Summer", "Winter"]
-
-    # Group safely and reindex to include all seasons
-    seasonal = (
-        d.groupby("season", as_index=False)["cases"]
-        .mean()
-        .set_index("season")
-        .reindex(season_order, fill_value=0)
-        .reset_index()
+# Merge doctor info
+if doctors_df is not None:
+    df = df.merge(
+        doctors_df[["doctorid", "doctorname", "departmentid"]],
+        on="doctorid",
+        how="left",
+        suffixes=("", "_doc")
     )
 
-    # --- Premium Seasonal Radar Chart (Enhanced Visibility) ---
-    fig_rad = go.Figure()
-
-    season_colors = {
-        "Monsoon": "rgba(255, 20, 147, 0.9)",      # Deep Pink
-        "Post-Monsoon": "rgba(138, 43, 226, 0.9)", # Blue Violet
-        "Summer": "rgba(0, 191, 255, 0.9)",        # Sky Blue
-        "Winter": "rgba(255, 140, 0, 0.9)"         # Orange
-    }
-
-    theta_values = season_order
-    r_values = seasonal["cases"].tolist()
-    colors = [season_colors[s] for s in theta_values]
-
-    fig_rad.add_trace(go.Scatterpolar(
-        r=r_values,
-        theta=theta_values,
-        fill="toself",
-        name="Average Cases",
-        line_color="rgba(255,255,255,1)",
-        fillcolor="rgba(138,43,226,0.5)",  # Bright purple-pink
-        marker=dict(size=9, color=colors, line=dict(color="white", width=1.2)),
-        hovertemplate="<b>%{theta}</b><br>Avg Cases: %{r:.0f}<extra></extra>",
-    ))
-
-    fig_rad.update_layout(
-        polar=dict(
-            bgcolor="rgba(30,0,60,0.9)",
-            radialaxis=dict(
-                visible=True,
-                showgrid=True,
-                gridcolor="rgba(255,255,255,0.15)",
-                linecolor="rgba(255,255,255,0.2)",
-                tickfont=dict(color="white", size=13),
-            ),
-            angularaxis=dict(
-                tickfont=dict(color="white", size=14, family="Arial Black"),
-                gridcolor="rgba(255,255,255,0.15)",
-            ),
-        ),
-        showlegend=False,
-        height=420,
-        paper_bgcolor="rgba(40,0,80,1)",
-        font=dict(color="white", size=13),
-        margin=dict(t=20, b=20, l=20, r=20),
-        title=dict(
-            text="Seasonal Disease Trend",
-            x=0.5,
-            font=dict(size=16, color="white", family="Arial Black"),
-        ),
+# Merge department info (via doctor's departmentid)
+if departments_df is not None and "departmentid" in departments_df.columns and "departmentid_doc" in df.columns:
+    df = df.merge(
+        departments_df[["departmentid", "departmentname"]],
+        left_on="departmentid_doc",
+        right_on="departmentid",
+        how="left"
     )
 
-    st.plotly_chart(fig_rad, use_container_width=True)
-    st.markdown(
-        "</div><div style='width:18px'></div><div style='flex:1'>",
-        unsafe_allow_html=True,
+# Base date/time fields
+df["appointmentdate"] = pd.to_datetime(df["appointmentdate"], errors="coerce")
+df["appointmenttime"] = pd.to_datetime(df["appointmenttime"], format="%H:%M:%S", errors="coerce")
+
+df["date"]       = df["appointmentdate"].dt.date
+df["year"]       = df["appointmentdate"].dt.year
+df["month"]      = df["appointmentdate"].dt.month
+df["month_name"] = df["appointmentdate"].dt.month_name()
+df["day_name"]   = df["appointmentdate"].dt.day_name()
+df["hour"]       = df["appointmenttime"].dt.hour
+
+# Age (approx)
+df["dob"] = pd.to_datetime(df["dob"], errors="coerce")
+today = pd.to_datetime(date.today())
+df["age"] = ((today - df["dob"]).dt.days / 365.25).round(0)
+
+# Season based on Indian weather pattern
+df["season"] = df["month"].apply(lambda m: india_season(int(m)) if pd.notna(m) else "Unknown")
+
+# Clean city & department text
+df["city"] = df["city"].astype(str).str.strip().replace("nan", np.nan)
+if "departmentname" in df.columns:
+    df["departmentname"] = df["departmentname"].astype(str).str.strip().replace("nan", np.nan)
+
+# ---------------------------------------------------------
+# Header
+# ---------------------------------------------------------
+st.markdown("""
+<div class="main-header">
+  <h2 style="margin-bottom:4px; color:#e5e7eb;">Clinic Analytics Dashboard</h2>
+  <div style="color:#9ca3af; font-size:13px;">
+    Interactive health management view with filters, seasonal analysis, geography, and ML-based forecasts.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# Global filter bar (single row on top)
+# ---------------------------------------------------------
+min_date = df["date"].min()
+max_date = df["date"].max()
+if pd.isna(min_date) or pd.isna(max_date):
+    min_date = date.today() - timedelta(days=30)
+    max_date = date.today()
+
+years_list  = sorted([int(y) for y in df["year"].dropna().unique().tolist()])
+cities_list = sorted([c for c in df["city"].dropna().unique().tolist()])
+dept_list   = sorted([d for d in df.get("departmentname", pd.Series([])).dropna().unique().tolist()])
+gender_list = sorted([g for g in df.get("gender", pd.Series([])).dropna().unique().tolist()])
+season_list = sorted([s for s in df.get("season", pd.Series([])).dropna().unique().tolist()])
+
+st.markdown('<div class="filter-bar">', unsafe_allow_html=True)
+f1, f2, f3, f4, f5, f6 = st.columns([2, 1.2, 1.6, 1.6, 1.2, 1.6])
+
+with f1:
+    date_range = st.date_input(
+        "📅 Date range",
+        value=(min_date, max_date)
+    )
+with f2:
+    selected_year = st.selectbox(
+        "Year",
+        options=["All"] + years_list,
+        index=0
+    )
+with f3:
+    selected_city = st.multiselect(
+        "City",
+        options=cities_list,
+        default=[]
+    )
+with f4:
+    selected_dept = st.multiselect(
+        "Department",
+        options=dept_list,
+        default=[]
+    )
+with f5:
+    selected_gender = st.multiselect(
+        "Gender",
+        options=gender_list,
+        default=[]
+    )
+with f6:
+    selected_season = st.multiselect(
+        "Season",
+        options=season_list,
+        default=[]
     )
 
-    # --- High-Contrast Disease Proportion Pie Chart ---
-    pie = d.groupby("disease", as_index=False)["cases"].sum()
-    if not pie.empty:
-        vibrant_colors = [
-            "#FF007F", "#00FFFF", "#FF8C00", "#9932CC",
-            "#FF1493", "#00FF7F", "#FFD700"
-        ]
-        fig_p = px.pie(
-            pie,
-            names="disease",
-            values="cases",
-            color_discrete_sequence=vibrant_colors,
-        )
-        fig_p.update_traces(
-            textinfo="label+percent",
-            textfont_size=13,
-            pull=[0.05] * len(pie),
-        )
-        fig_p.update_layout(
-            height=400,
-            paper_bgcolor="rgba(40,0,80,1)",
-            font=dict(color="white", size=13),
-            title=dict(
-                text="Disease-Wise Proportion",
-                x=0.5,
-                font=dict(size=16, color="white", family="Arial Black"),
-            ),
-        )
-        st.plotly_chart(fig_p, use_container_width=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# Apply filters to df -> df_filtered
+# ---------------------------------------------------------
+df_filtered = df.copy()
+
+# Date range
+if isinstance(date_range, tuple) and len(date_range) == 2:
+    start_d, end_d = date_range
 else:
-    st.warning("No data available for selected filters to display seasonal analysis.")
+    start_d, end_d = min_date, max_date
 
-    # Top 10 cities horizontal bar
-    st.markdown('<div class="card" style="margin-top:12px"><h4>Top 10 Cities by Cases</h4>', unsafe_allow_html=True)
-    top_cities = d.groupby('city', as_index=False)['cases'].sum().sort_values('cases', ascending=False).head(10)
-    if not top_cities.empty:
-        fig_tc = px.bar(top_cities, x='cases', y='city', orientation='h', color='cases', color_continuous_scale=['#ff9a9e','#8e44ad'])
-        fig_tc.update_layout(height=360)
-        st.plotly_chart(fig_tc, use_container_width=True)
+df_filtered = df_filtered[
+    (df_filtered["date"] >= start_d) &
+    (df_filtered["date"] <= end_d)
+]
+
+# Year filter
+if selected_year != "All":
+    df_filtered = df_filtered[df_filtered["year"] == selected_year]
+
+# City filter (keep city, no state filter)
+if selected_city:
+    df_filtered = df_filtered[df_filtered["city"].isin(selected_city)]
+
+# Department filter
+if selected_dept and "departmentname" in df_filtered.columns:
+    df_filtered = df_filtered[df_filtered["departmentname"].isin(selected_dept)]
+
+# Gender filter
+if selected_gender and "gender" in df_filtered.columns:
+    df_filtered = df_filtered[df_filtered["gender"].isin(selected_gender)]
+
+# Season filter
+if selected_season and "season" in df_filtered.columns:
+    df_filtered = df_filtered[df_filtered["season"].isin(selected_season)]
+
+# ---------------------------------------------------------
+# KPI Row
+# ---------------------------------------------------------
+k1, k2, k3, k4, k5 = st.columns(5)
+
+total_patients = patients_df["patientid"].nunique() if patients_df is not None else 0
+total_appointments = df_filtered["appointmentid"].nunique()
+
+unique_cities = df_filtered["city"].nunique()
+top_dept = "—"
+if "departmentname" in df_filtered.columns and not df_filtered.empty:
+    dept_counts = df_filtered["departmentname"].value_counts()
+    if not dept_counts.empty:
+        top_dept = dept_counts.index[0]
+
+# Bed capacity
+total_beds = 0
+if rooms_df is not None and "noofbeds" in rooms_df.columns:
+    total_beds = int(rooms_df["noofbeds"].fillna(0).sum())
+today_count = df[df["date"] == date.today()].shape[0] if "date" in df.columns else 0
+estimated_occ = (today_count / total_beds) if total_beds > 0 else 0
+available_beds = max(total_beds - today_count, 0) if total_beds > 0 else 0
+
+with k1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="metric-label">Total Patients</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{int(total_patients):,}</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Geographic Analysis ---
-with tabs[1]:
-    st.markdown('<div class="card"><h4>Geographic Distribution (Longitude vs Latitude)</h4></div>', unsafe_allow_html=True)
-    geo = d.groupby(['city','latitude','longitude'], as_index=False)['cases'].sum()
-    if geo.empty:
-        st.info("No data")
+with k2:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="metric-label">Appointments (Filtered)</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{int(total_appointments):,}</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with k3:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="metric-label">Cities Covered</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{int(unique_cities):,}</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with k4:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="metric-label">Busiest Department</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="metric-value">{top_dept}</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with k5:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="metric-label">Bed Capacity / Today</div>', unsafe_allow_html=True)
+    if total_beds > 0:
+        st.markdown(
+            f'<div class="metric-value">{today_count}/{total_beds} used</div>'
+            f'<div style="color:#9ca3af;font-size:12px;">Estimated occupancy: {estimated_occ:.1%} | Free: {available_beds}</div>',
+            unsafe_allow_html=True
+        )
     else:
-        fig_map = px.scatter_mapbox(geo, lat='latitude', lon='longitude', size='cases', hover_name='city', color='cases', color_continuous_scale='RdPu', zoom=4, height=430)
-        fig_map.update_layout(mapbox_style='open-street-map', margin=dict(l=10,r=10,t=10,b=10))
-        st.plotly_chart(fig_map, use_container_width=True)
-    # 3D correlation
-    st.markdown('<div class="card" style="margin-top:12px"><h4>3D Climate-Disease Correlation</h4></div>', unsafe_allow_html=True)
-    agg3 = d.groupby('city', as_index=False).agg({'cases':'sum','temperature':'mean','precipitation':'mean'})
-    if not agg3.empty:
-        fig3d = px.scatter_3d(agg3, x='temperature', y='precipitation', z='cases', color='cases', hover_name='city', height=420, color_continuous_scale='RdPu')
-        st.plotly_chart(fig3d, use_container_width=True)
-    # bubble correlation
-    st.markdown('<div class="card" style="margin-top:12px"><h4>Bubble: Cases vs Temp vs Precipitation</h4></div>', unsafe_allow_html=True)
-    bubble = d.groupby('city', as_index=False).agg({'cases':'sum','temperature':'mean','precipitation':'mean'})
-    if not bubble.empty:
-        fig_b = px.scatter(bubble, x='temperature', y='precipitation', size='cases', color='cases', hover_name='city', color_continuous_scale='RdPu', height=420)
-        st.plotly_chart(fig_b, use_container_width=True)
+        st.markdown('<div class="metric-value">N/A</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Trend Analysis ---
-with tabs[2]:
-    st.markdown('<div class="card"><h4>Deaths Timeline and Climate Factors</h4></div>', unsafe_allow_html=True)
-    dt = d.groupby('year', as_index=False)['deaths'].sum().sort_values('year')
-    figd = px.line(dt, x='year', y='deaths', markers=True, color_discrete_sequence=['#b28cff'])
-    figd.update_layout(height=300)
-    st.plotly_chart(figd, use_container_width=True)
-    climate = d.groupby('month', as_index=False)[['temperature','precipitation']].mean().sort_values('month')
-    if not climate.empty:
-        figc = go.Figure()
-        figc.add_trace(go.Scatter(x=climate['month'], y=climate['temperature'], mode='lines+markers', name='Temperature (K)', line=dict(color='#ff6aa3')))
-        figc.add_trace(go.Bar(x=climate['month'], y=climate['precipitation'], name='Precipitation (mm)', opacity=0.6, yaxis='y2', marker_color='#8e44ad'))
-        figc.update_layout(yaxis2=dict(overlaying='y', side='right'), height=380)
-        st.plotly_chart(figc, use_container_width=True)
-    # State-wise heatmap (pivot)
-    st.markdown('<div class="card" style="margin-top:12px"><h4>State-wise Heatmap (Total Cases)</h4></div>', unsafe_allow_html=True)
-    state_heat = d.groupby(['state','year'], as_index=False)['cases'].sum().pivot(index='state', columns='year', values='cases').fillna(0)
-    if not state_heat.empty:
-        fig_h = px.imshow(state_heat.values, x=state_heat.columns, y=state_heat.index, color_continuous_scale='RdPu', aspect='auto')
-        fig_h.update_layout(height=420)
+# ---------------------------------------------------------
+# Tabs layout
+# ---------------------------------------------------------
+tab_overview, tab_time, tab_geo, tab_dept_doc, tab_ml, tab_data = st.tabs(
+    ["Overview", "Time & Season", "Geographical", "Dept & Doctors", "ML Prediction", "Raw Data"]
+)
+
+# ---------------------------------------------------------
+# Overview tab
+# ---------------------------------------------------------
+with tab_overview:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Patients & Appointments Overview")
+
+    if df_filtered.empty:
+        st.info("No data for the selected filters.")
+    else:
+        c1, c2 = st.columns([2, 1.7])
+
+        # Appointment volume trend (multi visualization)
+        with c1:
+            st.markdown("**Appointment volume trend**")
+            chart_type = st.radio(
+                "Chart type",
+                ["Line", "Bar", "Area"],
+                horizontal=True,
+                key="trend_chart_type"
+            )
+            daily = (
+                df_filtered.groupby("date")["appointmentid"]
+                .count()
+                .reset_index(name="appointments")
+                .sort_values("date")
+            )
+            if not daily.empty:
+                if chart_type == "Line":
+                    fig = px.line(
+                        daily,
+                        x="date",
+                        y="appointments",
+                        markers=True,
+                        title="Appointments per day"
+                    )
+                elif chart_type == "Bar":
+                    fig = px.bar(
+                        daily,
+                        x="date",
+                        y="appointments",
+                        title="Appointments per day"
+                    )
+                else:  # Area
+                    fig = px.area(
+                        daily,
+                        x="date",
+                        y="appointments",
+                        title="Appointments per day"
+                    )
+                fig.update_layout(
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    template="plotly_dark"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No appointments in current filter for trend plot.")
+
+        # Appointment reasons & categories
+        with c2:
+            st.markdown("**Top appointment reasons**")
+            if "app_reason" in df_filtered.columns:
+                reasons_count = (
+                    df_filtered["app_reason"]
+                    .fillna("Unknown")
+                    .value_counts()
+                    .reset_index()
+                )
+                reasons_count.columns = ["reason", "count"]
+                fig_r = px.bar(
+                    reasons_count.head(10),
+                    x="reason",
+                    y="count",
+                    title="Top 10 reasons",
+                )
+                fig_r.update_layout(
+                    margin=dict(l=10, r=10, t=40, b=80),
+                    xaxis_tickangle=-45,
+                    template="plotly_dark"
+                )
+                st.plotly_chart(fig_r, use_container_width=True)
+            else:
+                st.info("No appointment reason column found.")
+
+    # Busiest hour distribution
+    st.markdown("---")
+    st.markdown("### Busiest hours (clinic load by time of day)")
+    if "hour" in df_filtered.columns and df_filtered["hour"].notna().any():
+        hour_counts = (
+            df_filtered.groupby("hour")["appointmentid"]
+            .count()
+            .reset_index(name="appointments")
+            .sort_values("hour")
+        )
+        fig_h = px.bar(
+            hour_counts,
+            x="hour",
+            y="appointments",
+            title="Appointments by hour",
+        )
+        fig_h.update_layout(
+            xaxis_title="Hour of day",
+            yaxis_title="Appointments",
+            template="plotly_dark"
+        )
         st.plotly_chart(fig_h, use_container_width=True)
-    # Yearly stacked bar by disease
-    st.markdown('<div class="card" style="margin-top:12px"><h4>Yearly Stacked: Disease vs Year</h4></div>', unsafe_allow_html=True)
-    ystack = d.groupby(['year','disease'], as_index=False)['cases'].sum()
-    if not ystack.empty:
-        fig_yst = px.bar(ystack, x='year', y='cases', color='disease', height=420)
-        st.plotly_chart(fig_yst, use_container_width=True)
 
-# --- ML Prediction (enhanced visuals) ---
-with tabs[3]:
-    st.markdown('<div class="card"><h4>Enhanced ML Prediction (Top-5 probabilities, feature impact, risk gauge)</h4></div>', unsafe_allow_html=True)
-    # Prepare training data
-    data_ml = df.copy()
-    data_ml = data_ml.sort_values(['city','disease','year','month','week'])
-    data_ml['prev_week_cases'] = data_ml.groupby(['city','disease'])['cases'].shift(1).fillna(0)
-    features = ['month','temperature','precipitation','lai','prev_week_cases']
-    le = LabelEncoder()
-    data_ml['disease_code'] = le.fit_transform(data_ml['disease'])
-    # sample to speed up training
-    train = data_ml.dropna().sample(n=min(6000, len(data_ml)), random_state=42)
-    X = train[features]
-    y = train['disease_code']
-    clf = GradientBoostingClassifier(n_estimators=120, random_state=42)
-    try:
-        clf.fit(X, y)
-    except Exception as e:
-        st.error("Model training failed: " + str(e))
-    # compute permutation importance (approximate) for visualization
-    try:
-        imp = permutation_importance(clf, X, y, n_repeats=6, random_state=42, n_jobs=1)
-        importances = pd.Series(imp.importances_mean, index=features).sort_values(ascending=False)
-    except Exception:
-        importances = pd.Series(clf.feature_importances_, index=features).sort_values(ascending=False)
-    # Prediction inputs
-    with st.form("predict_form"):
-        p1,p2,p3,p4 = st.columns([1.2,1,1,1])
-        with p1:
-            in_city = st.selectbox("City for prediction", ["All"] + sorted(df['city'].unique()), index=1)
-        with p2:
-            in_month = st.selectbox("Month", list(range(1,13)), index=6)
-        with p3:
-            in_temp = st.number_input("Temperature (K)", value=303.0)
-        with p4:
-            in_prec = st.number_input("Precipitation (mm)", value=2.5)
-        in_lai = st.number_input("LAI", value=3.0)
-        submit_pred = st.form_submit_button("Predict Top Diseases")
-    if submit_pred:
-        if in_city != "All":
-            prev = df[(df['city']==in_city)].sort_values(['year','month','week']).tail(7)['cases'].mean()
+        # Heatmap Day x Hour
+        pivot = (
+            df_filtered.pivot_table(
+                index="day_name",
+                columns="hour",
+                values="appointmentid",
+                aggfunc="count",
+                fill_value=0
+            )
+            .reindex(
+                ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+            )
+        )
+        fig_heat = go.Figure(
+            data=go.Heatmap(
+                z=pivot.values,
+                x=pivot.columns,
+                y=pivot.index,
+                coloraxis="coloraxis"
+            )
+        )
+        fig_heat.update_layout(
+            title="Heatmap – Day vs Hour",
+            xaxis_title="Hour",
+            yaxis_title="Day of week",
+            coloraxis_colorscale="Blues",
+            template="plotly_dark",
+            margin=dict(l=10, r=10, t=40, b=10)
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+    else:
+        st.info("No appointment time information available to compute hourly distribution.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# Time & Season tab
+# ---------------------------------------------------------
+with tab_time:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Time & Seasonal Analysis (India)")
+
+    if df_filtered.empty:
+        st.info("No data for the selected filters.")
+    else:
+        # Season-wise appointments
+        st.markdown("#### Appointments by season")
+        season_counts = (
+            df_filtered.groupby("season")["appointmentid"]
+            .count()
+            .reset_index(name="appointments")
+        ).sort_values("appointments", ascending=False)
+
+        if not season_counts.empty:
+            col_t1, col_t2 = st.columns([1.5, 1])
+            with col_t1:
+                fig_s_bar = px.bar(
+                    season_counts,
+                    x="season",
+                    y="appointments",
+                    title="Season-wise appointments",
+                )
+                fig_s_bar.update_layout(
+                    template="plotly_dark",
+                    xaxis_title="Season",
+                    yaxis_title="Appointments"
+                )
+                st.plotly_chart(fig_s_bar, use_container_width=True)
+            with col_t2:
+                fig_s_pie = px.pie(
+                    season_counts,
+                    names="season",
+                    values="appointments",
+                    title="Season share",
+                )
+                fig_s_pie.update_layout(template="plotly_dark")
+                st.plotly_chart(fig_s_pie, use_container_width=True)
         else:
-            prev = df['cases'].tail(7).mean()
-        Xpred = pd.DataFrame([{'month':in_month,'temperature':in_temp,'precipitation':in_prec,'lai':in_lai,'prev_week_cases':prev}])
-        probs = clf.predict_proba(Xpred)[0]
-        top_idx = np.argsort(probs)[::-1][:5]
-        diseases_list = le.inverse_transform(top_idx)
-        top_probs = probs[top_idx]
-        # show bar chart of top 5 probabilities
-        prob_df = pd.DataFrame({'disease': diseases_list, 'prob': top_probs})
-        fig_probs = px.bar(prob_df, x='disease', y='prob', color='prob', color_continuous_scale='RdPu', range_y=[0,1], height=320)
-        st.plotly_chart(fig_probs, use_container_width=True)
-        # feature impact radar using importances
-        fig_feat = go.Figure()
-        vals = importances.reindex(features).fillna(0).values
-        fig_feat.add_trace(go.Scatterpolar(r=vals, theta=features, fill='toself', name='Feature importance', line_color='#ff6aa3'))
-        fig_feat.update_layout(polar=dict(radialaxis=dict(visible=True)), height=360)
-        st.plotly_chart(fig_feat, use_container_width=True)
-        # risk gauge using indicator
-        risk_score = float(top_probs[0])
-        gauge = go.Figure(go.Indicator(mode="gauge+number", value=risk_score*100,
-                                      gauge={'axis': {'range': [0,100]}, 'bar': {'color':'#ff6aa3'},
-                                             'steps':[{'range':[0,35],'color':'#90ee90'},{'range':[35,60],'color':'#ffd700'},{'range':[60,100],'color':'#ff6aa3'}]}))
-        gauge.update_layout(height=240)
-        st.plotly_chart(gauge, use_container_width=True)
-        # explanation text (simple)
-        if risk_score > 0.6:
-            risk_cat = "High"
-        elif risk_score > 0.35:
-            risk_cat = "Medium"
+            st.info("No season data in current filter.")
+
+        st.markdown("---")
+
+        # Month trend within season
+        st.markdown("#### Monthly trend within seasons")
+        monthly = (
+            df_filtered.groupby(["year", "month", "month_name", "season"])["appointmentid"]
+            .count()
+            .reset_index(name="appointments")
+            .sort_values(["year", "month"])
+        )
+        if not monthly.empty:
+            fig_m = px.line(
+                monthly,
+                x="month_name",
+                y="appointments",
+                color="season",
+                markers=True,
+                line_group="year",
+                title="Monthly appointment trend by season"
+            )
+            fig_m.update_layout(
+                template="plotly_dark",
+                xaxis_title="Month",
+                yaxis_title="Appointments"
+            )
+            st.plotly_chart(fig_m, use_container_width=True)
         else:
-            risk_cat = "Low"
-        st.markdown(f"**Top prediction:** {diseases_list[0]} ({top_probs[0]:.1%}), **Risk:** {risk_cat}")
-        # show full probability table
-        full_probs = pd.DataFrame({'disease': le.inverse_transform(np.arange(len(le.classes_))), 'prob': clf.predict_proba(Xpred)[0]}).sort_values('prob', ascending=False)
-        st.dataframe(full_probs.head(12))
-    st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+            st.info("No monthly trend data.")
 
-# --- Reports & Downloads ---
-with tabs[4]:
-    st.markdown('<div class="card"><h4>Reports & Downloads</h4></div>', unsafe_allow_html=True)
-    st.download_button("Download Filtered CSV", d.to_csv(index=False).encode('utf-8'), "filtered_data_v5.csv", "text/csv")
-    # Excel summary generator
-    def make_excel_summary(filtered_df):
-        wb = Workbook()
-        # Sheet1: Filtered Data
-        ws1 = wb.active
-        ws1.title = "Filtered_Data"
-        for r in dataframe_to_rows(filtered_df, index=False, header=True):
-            ws1.append(r)
-        # style header
-        for cell in ws1[1]:
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill(start_color="FF6AA3", end_color="FF6AA3", fill_type="solid")
-        # Sheet2: Year Summary
-        ws2 = wb.create_sheet("Year_Summary")
-        ys = filtered_df.groupby('year', as_index=False)['cases','deaths'].sum().sort_values('year')
-        for r in dataframe_to_rows(ys, index=False, header=True):
-            ws2.append(r)
-        for cell in ws2[1]:
-            cell.font = Font(bold=True)
-            cell.fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
-        # Sheet3: Disease Summary
-        ws3 = wb.create_sheet("Disease_Summary")
-        ds = filtered_df.groupby('disease', as_index=False)['cases','deaths'].sum().sort_values('cases', ascending=False)
-        for r in dataframe_to_rows(ds, index=False, header=True):
-            ws3.append(r)
-        for cell in ws3[1]:
-            cell.font = Font(bold=True)
-            cell.fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
-        # Sheet4: Seasonal Average
-        ws4 = wb.create_sheet("Seasonal_Avg")
-        def month_to_season(m):
-            if m in [6,7,8,9]: return "Monsoon"
-            if m in [10,11,12,1]: return "Post-Monsoon"
-            if m in [2,3,4]: return "Summer"
-            return "Winter"
-        filtered_df['season'] = filtered_df['month'].apply(month_to_season)
-        sa = filtered_df.groupby('season', as_index=False)['cases','deaths'].mean()
-        for r in dataframe_to_rows(sa, index=False, header=True):
-            ws4.append(r)
-        for cell in ws4[1]:
-            cell.font = Font(bold=True)
-            cell.fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
-        # Save to bytes
-        bio = BytesIO()
-        wb.save(bio)
-        bio.seek(0)
-        return bio.getvalue()
-    if st.button("Download Excel Summary (multi-sheet)"):
-        excel_bytes = make_excel_summary(d.copy())
-        b64 = base64.b64encode(excel_bytes).decode()
-        href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="disease_summary_v5.xlsx">Click here to download Excel summary</a>'
-        st.markdown(href, unsafe_allow_html=True)
-    # PDF report (simple)
-    def make_pdf(filtered):
-        buf = BytesIO()
-        c = canvas.Canvas(buf, pagesize=A4)
-        w,h = A4
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(40, h-60, "Disease Analysis Report (v5)")
-        c.setFont("Helvetica", 11)
-        c.drawString(40, h-90, f"Total cases: {filtered['cases'].sum():,}")
-        c.drawString(40, h-110, f"Total deaths: {filtered['deaths'].sum():,}")
-        try:
-            import plotly.io as pio
-            t = filtered.groupby('year', as_index=False)['cases'].sum()
-            fig = px.bar(t, x='year', y='cases', title='Cases timeline', color_discrete_sequence=['#ff6aa3'])
-            img = pio.to_image(fig, format='png', width=640, height=260)
-            img_reader = ImageReader(BytesIO(img))
-            c.drawImage(img_reader, 40, h-370, width=520, height=200)
-        except Exception:
-            c.drawString(40, h-130, "Charts not embedded (kaleido missing).")
-        c.showPage()
-        c.save()
-        buf.seek(0)
-        return buf.read()
-    if st.button("Generate PDF Report"):
-        pdf = make_pdf(d.copy())
-        b64 = base64.b64encode(pdf).decode()
-        href = f'<a href="data:application/pdf;base64,{b64}" download="disease_report_v5.pdf">Download PDF report</a>'
-        st.markdown(href, unsafe_allow_html=True)
-    st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# Raw data preview (small)
-st.markdown('<div class="card"><h4>Data Preview (filtered)</h4></div>', unsafe_allow_html=True)
-st.dataframe(d.head(200))
+# ---------------------------------------------------------
+# Geographical tab (India map by city)
+# ---------------------------------------------------------
+with tab_geo:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Geographical Analysis – India (City-level)")
+
+    if df_filtered.empty:
+        st.info("No data for the selected filters.")
+    else:
+        geo = (
+            df_filtered.groupby("city")["appointmentid"]
+            .count()
+            .reset_index(name="appointments")
+        )
+        # Add coordinates
+        geo["lat"] = geo["city"].map(lambda c: CITY_COORDS.get(str(c), (np.nan, np.nan))[0])
+        geo["lon"] = geo["city"].map(lambda c: CITY_COORDS.get(str(c), (np.nan, np.nan))[1])
+        geo = geo.dropna(subset=["lat", "lon"])
+
+        if geo.empty:
+            st.info("No mapped city coordinates available for current data.")
+        else:
+            fig_geo = px.scatter_geo(
+                geo,
+                lat="lat",
+                lon="lon",
+                size="appointments",
+                color="appointments",
+                hover_name="city",
+                projection="mercator",
+                title="Patients / Appointments by City"
+            )
+            fig_geo.update_geos(
+                scope="asia",
+                showland=True,
+                landcolor="white",
+                showcountries=True,
+                showcoastlines=True,
+                center=dict(lat=22.0, lon=80.0),
+                lataxis_range=[5, 35],
+                lonaxis_range=[65, 100],
+)
+
+            fig_geo.update_layout(
+                margin=dict(l=10, r=10, t=40, b=10),
+                template="plotly_dark",
+                coloraxis_colorscale="Blues"
+            )
+            st.plotly_chart(fig_geo, use_container_width=True)
+
+            st.markdown("Top cities by appointments")
+            st.dataframe(
+                geo.sort_values("appointments", ascending=False).reset_index(drop=True),
+                use_container_width=True,
+                height=260
+            )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# Department & Doctor tab
+# ---------------------------------------------------------
+with tab_dept_doc:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Department & Doctor Performance")
+
+    if df_filtered.empty:
+        st.info("No data for the selected filters.")
+    else:
+        col_d1, col_d2 = st.columns([1.2, 1])
+
+        # Department-wise volume
+        with col_d1:
+            if "departmentname" in df_filtered.columns:
+                dept_stats = (
+                    df_filtered.groupby("departmentname")["appointmentid"]
+                    .count()
+                    .reset_index(name="appointments")
+                    .sort_values("appointments", ascending=False)
+                )
+                fig_dept = px.bar(
+                    dept_stats,
+                    x="departmentname",
+                    y="appointments",
+                    title="Appointments by department",
+                )
+                fig_dept.update_layout(
+                    template="plotly_dark",
+                    xaxis_tickangle=-30,
+                    xaxis_title="Department",
+                    yaxis_title="Appointments"
+                )
+                st.plotly_chart(fig_dept, use_container_width=True)
+            else:
+                st.info("Department name column not available.")
+
+        # Doctor performance (appointments + rating)
+        with col_d2:
+            if doctors_df is not None:
+                doc_perf = (
+                    df_filtered.groupby("doctorid")["appointmentid"]
+                    .count()
+                    .reset_index(name="appointments")
+                )
+                doc_perf = doc_perf.merge(
+                    doctors_df[["doctorid", "doctorname", "departmentid"]],
+                    on="doctorid",
+                    how="left"
+                )
+                if doctor_meta_df is not None:
+                    doc_perf = doc_perf.merge(
+                        doctor_meta_df,
+                        on="doctorid",
+                        how="left"
+                    )
+                if departments_df is not None:
+                    doc_perf = doc_perf.merge(
+                        departments_df[["departmentid", "departmentname"]],
+                        on="departmentid",
+                        how="left",
+                        suffixes=("", "_dept")
+                    )
+                if not doc_perf.empty:
+                    fig_doc = px.scatter(
+                        doc_perf,
+                        x="appointments",
+                        y="rating" if "rating" in doc_perf.columns else "appointments",
+                        size="appointments",
+                        color="departmentname",
+                        hover_name="doctorname",
+                        title="Doctor performance (appointments vs rating)",
+                    )
+                    fig_doc.update_layout(
+                        template="plotly_dark",
+                        xaxis_title="Appointments",
+                        yaxis_title="Rating (if available)"
+                    )
+                    st.plotly_chart(fig_doc, use_container_width=True)
+                else:
+                    st.info("No doctor performance data after filtering.")
+            else:
+                st.info("Doctor sheet not available in workbook.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# ML Prediction tab – Forecasts & predictive visuals
+# ---------------------------------------------------------
+with tab_ml:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("ML Prediction – Future Volume & Patterns")
+
+    if df_filtered.empty:
+        st.info("No data for the selected filters.")
+    else:
+        # 1) FUTURE APPOINTMENT VOLUME FORECAST (simple regression)
+        st.markdown("### 1️⃣ Future appointment volume forecast")
+
+        daily = (
+            df_filtered.groupby("date")["appointmentid"]
+            .count()
+            .reset_index(name="appointments")
+            .sort_values("date")
+        )
+
+        if daily.shape[0] < 5:
+            st.info("Not enough historical days for a meaningful forecast (need at least 5). Showing history only.")
+            fig_hist = px.line(
+                daily,
+                x="date",
+                y="appointments",
+                markers=True,
+                title="Historical daily appointments"
+            )
+            fig_hist.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_hist, use_container_width=True)
+        else:
+            # Simple linear trend model without external libraries
+            daily["day_index"] = range(len(daily))
+            x = daily["day_index"].values
+            y = daily["appointments"].values
+            coeffs = np.polyfit(x, y, deg=1)
+            a, b = coeffs  # y = a*x + b
+
+            horizon = st.slider(
+                "Forecast horizon (days)",
+                min_value=7,
+                max_value=30,
+                value=14
+            )
+
+            last_idx = daily["day_index"].max()
+            future_idx = np.arange(last_idx + 1, last_idx + 1 + horizon)
+            future_dates = [daily["date"].min() + timedelta(days=int(i)) for i in future_idx]
+            future_pred = a * future_idx + b
+            future_pred = np.maximum(future_pred, 0)  # no negative counts
+
+            hist_plot = daily[["date", "appointments"]].copy()
+            hist_plot["type"] = "Actual"
+
+            future_plot = pd.DataFrame({
+                "date": future_dates,
+                "appointments": future_pred,
+                "type": "Forecast"
+            })
+
+            combined = pd.concat([hist_plot, future_plot], ignore_index=True)
+
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                fig_fore_line = px.line(
+                    combined,
+                    x="date",
+                    y="appointments",
+                    color="type",
+                    markers=True,
+                    title="Daily appointments – history & forecast"
+                )
+                fig_fore_line.update_layout(
+                    template="plotly_dark",
+                    xaxis_title="Date",
+                    yaxis_title="Appointments"
+                )
+                st.plotly_chart(fig_fore_line, use_container_width=True)
+
+            with col_f2:
+                fig_fore_bar = px.bar(
+                    future_plot,
+                    x="date",
+                    y="appointments",
+                    title="Forecasted daily appointments (future only)"
+                )
+                fig_fore_bar.update_layout(
+                    template="plotly_dark",
+                    xaxis_title="Date",
+                    yaxis_title="Forecasted appointments"
+                )
+                st.plotly_chart(fig_fore_bar, use_container_width=True)
+
+            # Simple statistic: next 7 days
+            next_7_total = future_plot.head(7)["appointments"].sum()
+            st.markdown(
+                f"**Projected appointments for next 7 days:** `{next_7_total:.0f}` (based on linear trend)"
+            )
+
+        st.markdown("---")
+
+        # 2) HEATMAP & CHARTS FOR PREDICTIVE FACTORS
+        st.markdown("### 2️⃣ Predictive patterns – season, weekday, department")
+
+        if not df_filtered.empty:
+            # Season x Department heatmap
+            if "season" in df_filtered.columns and "departmentname" in df_filtered.columns:
+                cross = (
+                    df_filtered
+                    .groupby(["season", "departmentname"])["appointmentid"]
+                    .count()
+                    .reset_index(name="appointments")
+                )
+                if not cross.empty:
+                    pivot_sd = cross.pivot(
+                        index="season", columns="departmentname", values="appointments"
+                    ).fillna(0)
+                    fig_sd = go.Figure(
+                        data=go.Heatmap(
+                            z=pivot_sd.values,
+                            x=pivot_sd.columns,
+                            y=pivot_sd.index,
+                            coloraxis="coloraxis"
+                        )
+                    )
+                    fig_sd.update_layout(
+                        title="Heatmap – Season vs Department (appointments)",
+                        xaxis_title="Department",
+                        yaxis_title="Season",
+                        coloraxis_colorscale="Blues",
+                        template="plotly_dark",
+                        margin=dict(l=10, r=10, t=40, b=80)
+                    )
+                    st.plotly_chart(fig_sd, use_container_width=True)
+
+            col_pf1, col_pf2 = st.columns(2)
+
+            # Bar: season-wise volume
+            with col_pf1:
+                season_counts = (
+                    df_filtered.groupby("season")["appointmentid"]
+                    .count()
+                    .reset_index(name="appointments")
+                )
+                if not season_counts.empty:
+                    fig_season_bar = px.bar(
+                        season_counts,
+                        x="season",
+                        y="appointments",
+                        title="Season-wise appointment volume",
+                    )
+                    fig_season_bar.update_layout(
+                        template="plotly_dark",
+                        xaxis_title="Season",
+                        yaxis_title="Appointments"
+                    )
+                    st.plotly_chart(fig_season_bar, use_container_width=True)
+
+            # Pie: weekday share
+            with col_pf2:
+                weekday_counts = (
+                    df_filtered.groupby("day_name")["appointmentid"]
+                    .count()
+                    .reset_index(name="appointments")
+                )
+                if not weekday_counts.empty:
+                    # reorder weekdays
+                    weekday_order = [
+                        "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
+                    ]
+                    weekday_counts["day_name"] = pd.Categorical(
+                        weekday_counts["day_name"], categories=weekday_order, ordered=True
+                    )
+                    weekday_counts = weekday_counts.sort_values("day_name")
+                    fig_weekday_pie = px.pie(
+                        weekday_counts,
+                        names="day_name",
+                        values="appointments",
+                        title="Weekday share of appointments",
+                    )
+                    fig_weekday_pie.update_layout(template="plotly_dark")
+                    st.plotly_chart(fig_weekday_pie, use_container_width=True)
+
+        st.markdown("---")
+
+        # 3) Bed demand projection (very simple ML-style estimate)
+        st.markdown("### 3️⃣ Bed demand projection (simple estimate)")
+
+        if rooms_df is not None and "noofbeds" in rooms_df.columns:
+            total_beds = int(rooms_df["noofbeds"].fillna(0).sum())
+            # Use recent 7 days from df_filtered (or full df if less)
+            if not df_filtered.empty:
+                recent_days = (
+                    df_filtered
+                    .groupby("date")["appointmentid"]
+                    .count()
+                    .reset_index(name="appointments")
+                    .sort_values("date", ascending=False)
+                    .head(7)
+                )
+                avg_recent = recent_days["appointments"].mean()
+
+                # simple rule: assume one bed per appointment as an upper bound
+                projected_bed_demand = min(total_beds, avg_recent)
+                fig_bed = go.Figure()
+                fig_bed.add_trace(
+                    go.Bar(
+                        x=["Total Beds"],
+                        y=[total_beds],
+                        name="Total Beds"
+                    )
+                )
+                fig_bed.add_trace(
+                    go.Bar(
+                        x=["Projected Demand"],
+                        y=[projected_bed_demand],
+                        name="Projected Bed Demand (next 7 days avg)"
+                    )
+                )
+                fig_bed.update_layout(
+                    barmode="group",
+                    title="Projected bed demand vs total capacity",
+                    template="plotly_dark",
+                    yaxis_title="Beds"
+                )
+                st.plotly_chart(fig_bed, use_container_width=True)
+
+                st.markdown(
+                    f"- **Total beds:** `{total_beds}`  \n"
+                    f"- **Avg appointments (last 7 days in filter):** `{avg_recent:.1f}`  \n"
+                    f"- **Projected peak demand:** `{projected_bed_demand:.1f}` beds"
+                )
+            else:
+                st.info("No filtered appointments to compute bed demand.")
+        else:
+            st.info("Room / bed metadata not found in workbook.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# Raw data tab
+# ---------------------------------------------------------
+with tab_data:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Filtered appointment dataset")
+
+    st.dataframe(
+        df_filtered.reset_index(drop=True),
+        use_container_width=True,
+        height=500
+    )
+    st.markdown(
+        f"Rows: **{df_filtered.shape[0]}**, Columns: **{df_filtered.shape[1]}**"
+    )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# Footer
+# ---------------------------------------------------------
+st.markdown(
+    "<div style='text-align:center;color:#6b7280;font-size:12px;margin-top:10px;'>"
+    "Dashboard: Filters on top • India seasonal logic • City-based map • ML predictions on appointment volume & bed demand."
+    "</div>",
+    unsafe_allow_html=True
+)
