@@ -4,7 +4,6 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
-import numpy as np
 
 # ---------------------------------------------------------
 # Streamlit basic config
@@ -124,20 +123,30 @@ CITY_COORDS = {
 @st.cache_data
 def load_workbook():
     """
-    Automatically load the Excel database shipped with the app.
+    Load Excel workbook that is committed in the same folder
+    as this Streamlit app (GitHub repo root or app folder).
+
+    It first tries Clinic_db_with_metadata.xlsx
+    then falls back to Clinic_db.xlsx.
     """
-    file_path = "Clinic_db_with_metadata.xlsx"
+    excel_files = ["Clinic_db_with_metadata.xlsx", "Clinic_db.xlsx"]
 
-    try:
-        xls = pd.read_excel(Clinic_db_with_metadata.xlsx, sheet_name=None)
-        return xls
-    except FileNotFoundError:
-        st.error(f" File not found at: {file_path}")
-        st.stop()
+    for fname in excel_files:
+        try:
+            xls = pd.read_excel(fname, sheet_name=None)
+            return xls
+        except FileNotFoundError:
+            continue
+
+    # If neither file is found:
+    st.error(
+        "Could not find **Clinic_db_with_metadata.xlsx** or **Clinic_db.xlsx** "
+        "in the same folder as this app. "
+        "Please make sure the file is committed to the repo in this folder."
+    )
+    st.stop()
+
 sheets = load_workbook()
-
-
-
 
 appointments_df = sheets.get("appointments")
 patients_df     = sheets.get("patient")
@@ -638,7 +647,7 @@ with tab_geo:
                 center=dict(lat=22.0, lon=80.0),
                 lataxis_range=[5, 35],
                 lonaxis_range=[65, 100],
-)
+            )
 
             fig_geo.update_layout(
                 margin=dict(l=10, r=10, t=40, b=10),
