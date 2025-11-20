@@ -129,7 +129,7 @@ def load_workbook():
     file_path = "Clinic_db_with_metadata.xlsx"
 
     try:
-        xls = pd.read_excel(Clinic_db_with_metadata, sheet_name=None)
+        xls = pd.read_excel(Clinic_db_with_metadata.xlsx, sheet_name=None)
         return xls
     except FileNotFoundError:
         st.error(f" File not found at: {file_path}")
