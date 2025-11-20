@@ -126,10 +126,10 @@ def load_workbook():
     """
     Automatically load the Excel database shipped with the app.
     """
-    file_path = "/mnt/data/Clinic_db_with_metadata.xlsx"
+    file_path = "Clinic_db_with_metadata.xlsx"
 
     try:
-        xls = pd.read_excel(file_path, sheet_name=None)
+        xls = pd.read_excel(Clinic_db_with_metadata, sheet_name=None)
         return xls
     except FileNotFoundError:
         st.error(f" File not found at: {file_path}")
