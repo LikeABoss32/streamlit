@@ -122,18 +122,21 @@ CITY_COORDS = {
 # Data loading
 # ---------------------------------------------------------
 @st.cache_data
-def load_workbook():
-    """
-    Try to load Clinic_db_with_metadata.xlsx first,
-    fallback to Clinic_db.xlsx if needed.
-    """
-    try:
-        xls = pd.read_excel("Clinic_db_with_metadata.xlsx", sheet_name=None)
-    except FileNotFoundError:
-        xls = pd.read_excel("Clinic_db.xlsx", sheet_name=None)
-    return xls
+uploaded_file = st.file_uploader(
+    "📂 Upload Clinic Database Excel file",
+    type=["xlsx"]
+)
 
-sheets = load_workbook()
+@st.cache_data
+def load_workbook(uploaded):
+    if uploaded is not None:
+        return pd.read_excel(uploaded, sheet_name=None)
+    else:
+        st.warning("Please upload Clinic_db_with_metadata.xlsx")
+        return {}
+
+
+sheets = load_workbook(uploaded_file)
 
 appointments_df = sheets.get("appointments")
 patients_df     = sheets.get("patient")
