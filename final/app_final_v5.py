@@ -121,27 +121,22 @@ CITY_COORDS = {
 # ---------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------
-uploaded_file = st.file_uploader(
-    "📂 Upload Clinic Database Excel file",
-    type=["xlsx"]
-)
-
 @st.cache_data
-def load_workbook(file_bytes):
-    if file_bytes is None:
-        return {}
+def load_workbook():
+    """
+    Automatically load the Excel database shipped with the app.
+    """
+    file_path = "/mnt/data/Clinic_db_with_metadata.xlsx"
 
-    # IMPORTANT: use BytesIO
-    from io import BytesIO
-    return pd.read_excel(BytesIO(file_bytes), sheet_name=None)
-    
+    try:
+        xls = pd.read_excel(file_path, sheet_name=None)
+        return xls
+    except FileNotFoundError:
+        st.error(f" File not found at: {file_path}")
+        st.stop()
+sheets = load_workbook()
 
-if uploaded_file is None:
-    st.warning("Please upload Clinic_db_with_metadata.xlsx")
-    st.stop()
 
-# Read actual bytes
-sheets = load_workbook(uploaded_file.getvalue())
 
 
 appointments_df = sheets.get("appointments")
