@@ -122,27 +122,46 @@ CITY_COORDS = {
 # ---------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------
+# ---------------------------------------------------------
+# Data loading (FINAL WORKING VERSION FOR CSV)
+# ---------------------------------------------------------
 @st.cache_data
 def load_workbook():
- 
 
-        try:
-            df = pd.read_csv("Clinic_db_with_metadata.csv")
+    file_name = "Clinic_db_with_metadata.csv"
 
-            return xls
-        except FileNotFoundError:
-            continue
+    try:
+        df = pd.read_csv(file_name)
+        st.success(f"Loaded: {file_name}")
 
-    # If neither file is found:
-    st.error(
-        "Could not find **Clinic_db_with_metadata.xlsx** or **Clinic_db.xlsx** "
-        "in the same folder as this app. "
-        "Please make sure the file is committed to the repo in this folder."
-    )
-    st.stop()
+        # Check if CSV has the special sheet identifier column
+        if "__sheet__" not in df.columns:
+            st.error("CSV file must contain a '__sheet__' column to identify sheets.")
+            st.stop()
 
+        # Build sheets dictionary
+        sheets = {}
+        for sheet_name in df["__sheet__"].unique():
+            sheet_df = df[df["__sheet__"] == sheet_name].copy()
+            sheet_df.drop(columns=["__sheet__"], inplace=True)
+            sheets[sheet_name] = sheet_df
+
+        return sheets
+
+    except FileNotFoundError:
+        st.error("""
+        ❌ CSV file not found: Clinic_db_with_metadata.csv
+
+        Make sure the file exists in the SAME folder as your Streamlit app
+        and is committed to the GitHub repository.
+        """)
+        st.stop()
+
+
+# Load the sheets
 sheets = load_workbook()
 
+# Extract each sheet like before
 appointments_df = sheets.get("appointments")
 patients_df     = sheets.get("patient")
 departments_df  = sheets.get("department")
@@ -153,9 +172,13 @@ reason_meta_df  = sheets.get("reason_categories")
 doctor_meta_df  = sheets.get("doctor_meta")
 room_meta_df    = sheets.get("room_meta")
 
+# Validate required sheets
 if appointments_df is None or patients_df is None:
-    st.error("Appointments or Patient sheet is missing in the workbook. Please check the Excel file.")
+    st.error("Required sheets 'appointments' or 'patient' are missing in the CSV.")
     st.stop()
+
+
+
 
 # ---------------------------------------------------------
 # Build enriched appointments dataframe
